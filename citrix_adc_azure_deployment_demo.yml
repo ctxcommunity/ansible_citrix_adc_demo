@@ -31,7 +31,7 @@
     admin_console_source_ip: '174.73.147.139/32'
 
   tasks:
-    - name: Create Resource Group for Citrix ADX Demo
+    - name: Create Resource Group for Citrix ADC Demo
       azure_rm_resourcegroup:
         name: citrix_adc_demo
         location: West US 2
