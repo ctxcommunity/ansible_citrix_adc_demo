@@ -1,0 +1,159 @@
+---
+- hosts: localhost
+  connection: local
+
+#  Create your own pwd_var/{{ runas_admin }}.yml  ( Demo uses pwd_var/joe.yml)
+#
+# Add the following entries to this file
+#  azure_admin_username: myadmin
+#  azure_admin_password: ThinkofaReallyGoodPassword!
+
+#  nitro_user: "{{ azure_admin_username }}"
+#  nitro_pass: "{{ azure_admin_password}}"
+#
+# Encrypt this file by running
+#
+#   ansible-vault encrypt pwd_var/{{ choosen name }}.yml
+#     For example: ansible-vault encrypt pwd_var/joe.yml
+# Input a password that you will now use to encrypt/decrypt the file
+#
+# When running the playbook, add the following
+#
+#   ansible-playbook citrix_adc_azure_deployment_demo.yml --extra-vars="runas_admin={{ choosen name }}" --ask-vault-pass
+#     For Example: ansible-playbook citrix_adc_azure_deployment_demo.yml --extra-vars="runas_admin=joe" --ask-vault-pass
+
+  vars_files:
+    - "pwd_vars/{{ runas_admin }}.yml"
+
+# For this demo, the Citrix ADC Web UI Console and the VIP are restricted to the following IP Address
+
+  vars:
+    admin_console_source_ip: '174.73.147.139/32'
+
+  tasks:
+    - name: Create Resource Group for Citrix ADX Demo
+      azure_rm_resourcegroup:
+        name: citrix_adc_demo
+        location: West US 2
+        state: present
+
+    - name: Create virtual network
+      azure_rm_virtualnetwork:
+        resource_group: citrix_adc_demo
+        name: vnet
+        address_prefixes: "10.0.0.0/16"
+
+    - name: Add subnet
+      azure_rm_subnet:
+        resource_group: citrix_adc_demo
+        name: snet001
+        address_prefix: "10.0.1.0/24"
+        virtual_network: vnet
+      register: azure_rm_subnet
+
+    - name: Create public IP address 1
+      azure_rm_publicipaddress:
+        resource_group: citrix_adc_demo
+        sku: standard
+        allocation_method: static
+        name: citrix-adc-demo-public-ip-1
+      register: citrix_adc_demo_public_ip_1
+
+    - name: Output public IP
+      debug:
+        msg: "The NSIP public IP is {{ citrix_adc_demo_public_ip_1.state.ip_address }}"
+
+    - name: Create public IP address 2
+      azure_rm_publicipaddress:
+        resource_group: citrix_adc_demo
+        sku: standard
+        allocation_method: static
+        name: citrix-adc-demo-public-ip-2
+      register: citrix_adc_demo_public_ip_2
+
+    - name: Output public IP
+      debug:
+        msg: "The VIP public IP is {{ citrix_adc_demo_public_ip_2.state.ip_address }}"
+
+    - name: Create Network Security Group
+      azure_rm_securitygroup:
+        resource_group: citrix_adc_demo
+        name: citrix-adc-demo-nic1-nsg
+        rules:
+        - name: 'ssh-rule'
+          protocol: Tcp
+          source_address_prefix:
+            - "{{ admin_console_source_ip }}"
+          destination_port_range: 22
+          access: Allow
+          priority: 1001
+          direction: Inbound
+        - name: 'http-rule'
+          protocol: Tcp
+          source_address_prefix:
+            - "{{ admin_console_source_ip }}"
+          destination_port_range:
+            - 80
+            - 443
+          access: Allow
+          priority: 1002
+          direction: Inbound
+
+    - name: Create a network interface
+      azure_rm_networkinterface:
+        name: citrix-adc-demo-nic1
+        resource_group: citrix_adc_demo
+        virtual_network: vnet
+        subnet_name: snet001
+        security_group: citrix-adc-demo-nic1-nsg
+        ip_configurations:
+          - name: nsip
+            public_ip_address_name: citrix-adc-demo-public-ip-1
+            primary: true
+          - name: vip
+            public_ip_address_name: citrix-adc-demo-public-ip-2
+            primary: false
+          - name: snip
+            private_ip_address:
+            primary: false
+      register: azure_rm_networkinterface
+
+    - name: Create Storage Account for Boot Diagnostics
+      azure_rm_storageaccount:
+        resource_group: citrix_adc_demo
+        name: ctxdemostorageacct1999
+        account_type: Standard_LRS
+
+    - name: Create VM
+      azure_rm_virtualmachine:
+        resource_group: citrix_adc_demo
+        name: citrix-adc-demo-vm
+        vm_size: Standard_A2_v2
+        admin_username: "{{ azure_admin_username }}"
+        admin_password: "{{ azure_admin_password }}"
+        network_interfaces: citrix-adc-demo-nic1
+        os_type: Linux
+        managed_disk_type: Standard_LRS
+        os_disk_name: citrix-adc-demo-os-disk
+        boot_diagnostics:
+          enabled: yes
+          storage_account: ctxdemostorageacct1999
+        image:
+          offer: netscalervpx-130
+          publisher: citrix
+          sku: netscalervpxexpress
+          version: latest
+        plan:
+          # name: netscalerbyol
+          # name: netscaler3000platinum
+          name: netscalervpxexpress
+          product: netscalervpx-130
+          publisher: citrix
+        custom_data: " { \"vpx_config\": {
+                            \"pvt_ip_11\": \"{{ azure_rm_networkinterface.state.ip_configurations[1].private_ip_address }}\",
+                            \"pvt_ip_12\": \"{{ azure_rm_networkinterface.state.ip_configurations[2].private_ip_address }}\",
+                            \"subnet_11\": \"{{ azure_rm_subnet.state.address_prefix }}\",
+                            \"subnet_12\": \"{{ azure_rm_subnet.state.address_prefix }}\",
+                            \"PublishMonitoringMetrics\": false,
+                            \"ns_features\": [\"LB\", \"CS\", \"SSL\", \"WL\"] }}"
+      no_log: true

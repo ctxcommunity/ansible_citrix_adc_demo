@@ -1,0 +1,254 @@
+---
+  - hosts: localhost
+# For Citrix ADC shell support
+    gather_facts: False
+    collections:
+      - citrix.adc
+
+#  Create your own pwd_var/{{ runas_admin }}.yml  ( Demo uses pwd_var/joe.yml)
+#
+# Add the following entries to this file
+#  azure_admin_username: myadmin
+#  azure_admin_password: ThinkofaReallyGoodPassword!
+
+#  nitro_user: "{{ azure_admin_username }}"
+#  nitro_pass: "{{ azure_admin_password}}"
+#
+# Encrypt this file by running
+#
+#   ansible-vault encrypt pwd_var/{{ choosen name }}.yml
+#     For example: ansible-vault encrypt pwd_var/joe.yml
+# Input a password that you will now use to encrypt/decrypt the file
+#
+# When running the playbook, add the following
+#
+#   ansible-playbook configure_adc_web_servers.yml --extra-vars="runas_admin={{ choosen name }}" --ask-vault-pass
+#     For Example: ansible-playbook configure_adc_web_servers.yml --extra-vars="runas_admin=joe" --ask-vault-pass
+
+#  The nsip variable need to be defined.  This
+#
+#  nsip: 1.2.3.4
+    vars_files:
+      - "pwd_vars/{{ runas_admin }}.yml"
+      - workflows.yaml
+    vars:
+      nsip: 20.98.124.11
+
+    tasks:
+      - name: Copy cert key
+        delegate_to: localhost
+        citrix_adc_system_file:
+          nitro_user: '{{ nitro_user }}'
+          nitro_pass: '{{ nitro_pass }}'
+          nsip: '{{ nsip }}'
+          nitro_protocol: https
+          validate_certs: no
+          state: present
+          filename: cert.key
+          filelocation: /nsconfig/ssl/
+          filecontent: "{{ lookup('file', 'files/cert.key') }}"
+
+      - name: Copy cert
+        delegate_to: localhost
+        citrix_adc_system_file:
+          nitro_user: '{{ nitro_user }}'
+          nitro_pass: '{{ nitro_pass }}'
+          nsip: '{{ nsip }}'
+          nitro_protocol: https
+          validate_certs: no
+          state: present
+          filename: cert.crt
+          filelocation: /nsconfig/ssl/
+          filecontent: "{{ lookup('file', 'files/cert.crt') }}"
+
+      - name: Add Certificate Keypair
+        delegate_to: localhost
+        citrix_adc_ssl_certkey:
+          nsip: "{{ nsip }}"
+          nitro_user: "{{ nitro_user }}"
+          nitro_pass: "{{ nitro_pass }}"
+          nitro_protocol: https
+          validate_certs: no
+          state: present
+          certkey: cert.kp
+          cert: cert.crt
+          key: cert.key
+          expirymonitor: enabled
+          notificationperiod: 60
+          inform: PEM
+        no_log: true
+
+      - name: Setup cipher
+        delegate_to: localhost
+        citrix_adc_sslcipher:
+          nsip: "{{ nsip }}"
+          nitro_user: "{{ nitro_user }}"
+          nitro_pass: "{{ nitro_pass }}"
+          nitro_protocol: https
+          validate_certs: no
+          state: present
+          ciphergroupname: custom-secure
+
+      - name: Setup cipher binding
+        delegate_to: localhost
+        citrix_adc_sslcipher_sslciphersuite_binding:
+          nsip: "{{ nsip }}"
+          nitro_user: "{{ nitro_user }}"
+          nitro_pass: "{{ nitro_pass }}"
+          nitro_protocol: https
+          validate_certs: no
+          state: present
+          ciphergroupname: custom-secure
+          ciphername: "{{ item.cipher }}"
+          cipherpriority: "{{ item.priority }}"
+        with_items:
+          - { cipher: 'TLS1.3-CHACHA20-POLY1305-SHA256', priority: '1' }
+          - { cipher: 'TLS1.3-AES128-GCM-SHA256', priority: '2' }
+          - { cipher: 'TLS1.3-AES256-GCM-SHA384', priority: '3' }
+          - { cipher: 'TLS1.2-ECDHE-ECDSA-AES128-GCM-SHA256', priority: '4' }
+          - { cipher: 'TLS1.2-ECDHE-ECDSA-AES256-GCM-SHA384', priority: '5' }
+          - { cipher: 'TLS1.2-ECDHE-ECDSA-AES128-SHA256', priority: '6' }
+          - { cipher: 'TLS1.2-ECDHE-ECDSA-AES256-SHA384', priority: '7' }
+          - { cipher: 'TLS1.2-ECDHE-RSA-AES128-GCM-SHA256', priority: '8' }
+          - { cipher: 'TLS1.2-ECDHE-RSA-AES256-GCM-SHA384', priority: '9' }
+          - { cipher: 'TLS1.2-DHE-RSA-AES128-GCM-SHA256', priority: '10' }
+          - { cipher: 'TLS1.2-DHE-RSA-AES256-GCM-SHA384', priority: '11' }
+          - { cipher: 'TLS1.2-ECDHE-ECDSA-CHACHA20-POLY1305', priority: '12' }
+          - { cipher: 'TLS1.2-ECDHE-RSA-CHACHA20-POLY1305', priority: '13' }
+
+      - name: Create Servers
+        delegate_to: localhost
+        citrix_adc_server:
+          nsip: "{{ nsip }}"
+          nitro_user: "{{ nitro_user }}"
+          nitro_pass: "{{ nitro_pass }}"
+          nitro_protocol: https
+          validate_certs: no
+          state: present
+          disabled: "{{ item.disabled }}"
+          name: "{{ item.name }}"
+          ipaddress: "{{ item.ipaddress }}"
+        with_items:
+          - { name: 'web1.theshonkproject.com:blue:srv', ipaddress: '10.0.1.7', disabled: false }
+          - { name: 'web2.theshonkproject.com:red:srv', ipaddress: '10.0.1.8', disabled: true }
+          - { name: 'web3.theshonkproject.com:green:srv', ipaddress: '10.0.1.9', disabled: true }
+
+      - name: Create Service Group
+        delegate_to: localhost
+        citrix_adc_servicegroup:
+          nsip: "{{ nsip }}"
+          nitro_user: "{{ nitro_user }}"
+          nitro_pass: "{{ nitro_pass }}"
+          nitro_protocol: https
+          validate_certs: no
+          state: present
+
+          servicegroupname: "web_server_demo:lb:sg:http"
+          servicetype: HTTP
+          clttimeout: 300
+          servicemembers:
+            mode: exact
+            attributes:
+              - servername: web1.theshonkproject.com:blue:srv
+                port: 80
+              - servername: web2.theshonkproject.com:red:srv
+                port: 80
+              - servername: web3.theshonkproject.com:green:srv
+                port: 80
+          monitor_bindings:
+            mode: exact
+            attributes:
+              - monitor_name: http
+
+      - name: Create vServer
+        delegate_to: localhost
+        citrix_adc_lb_vserver:
+          nsip: "{{ nsip }}"
+          nitro_user: "{{ nitro_user }}"
+          nitro_pass: "{{ nitro_pass }}"
+          nitro_protocol: https
+          validate_certs: no
+          state: present
+          name: "web_server_demo:lb:vs:https"
+          servicetype: SSL
+          ipv46: 10.0.1.5
+          port: 443
+          timeout: 10
+          lbmethod: ROUNDROBIN
+          persistencetype: SOURCEIP
+          servicegroupbindings:
+            - servicegroupname: "web_server_demo:lb:sg:http"
+        no_log: true
+
+      - name: Bind Certifcate to vServer
+        delegate_to: localhost
+        citrix_adc_nitro_resource:
+          nsip: "{{ nsip }}"
+          nitro_user: "{{ nitro_user }}"
+          nitro_pass: "{{ nitro_pass }}"
+          nitro_protocol: https
+          validate_certs: no
+          state: present
+
+          workflow: "{{ workflow.sslvserver_sslcertkey_binding }}"
+
+          resource:
+            vservername: web_server_demo:lb:vs:https
+            certkeyname: cert.kp
+
+      - name: Bind custom-secure cipherlist to vServer
+        delegate_to: localhost
+        citrix_adc_nitro_request:
+          expected_nitro_errorcode: [0, 258, 3741]
+          nsip: "{{ nsip }}"
+          nitro_user: "{{ nitro_user }}"
+          nitro_pass: "{{ nitro_pass }}"
+          nitro_protocol: https
+          validate_certs: no
+          operation: add
+          resource: sslvserver_sslcipher_binding
+          attributes:
+            ciphername: custom-secure
+            vservername: "web_server_demo:lb:vs:https"
+
+      - name: Remove DEFAULT cipherlist to vServer
+        delegate_to: localhost
+        citrix_adc_nitro_request:
+          expected_nitro_errorcode: [0, 258, 1208]
+          nsip: "{{ nsip }}"
+          nitro_user: "{{ nitro_user }}"
+          nitro_pass: "{{ nitro_pass }}"
+          nitro_protocol: https
+          validate_certs: no
+          operation: delete_by_args
+          resource: sslvserver_sslcipher_binding
+          args:
+            ciphername: DEFAULT
+            vservername: "web_server_demo:lb:vs:https"
+
+      - name: Update SSL/TLS Protocols Supported
+        delegate_to: localhost
+        citrix_adc_nitro_request:
+          nsip: "{{ nsip }}"
+          nitro_user: "{{ nitro_user }}"
+          nitro_pass: "{{ nitro_pass }}"
+          nitro_protocol: https
+          validate_certs: no
+          operation: update
+          resource: sslvserver
+          name: "web_server_demo:lb:vs:https"
+          attributes:
+            ssl3: disabled
+            tls1: disabled
+            tls11: disabled
+            tls13: enabled
+            vservername: "web_server_demo:lb:vs:https"
+
+      - name: Save Configuration
+        delegate_to: localhost
+        citrix_adc_save_config:
+          nsip: "{{ nsip }}"
+          nitro_user: "{{ nitro_user }}"
+          nitro_pass: "{{ nitro_pass }}"
+          nitro_protocol: https
+          validate_certs: no

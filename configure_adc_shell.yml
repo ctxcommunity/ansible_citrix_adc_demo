@@ -1,0 +1,57 @@
+---
+  - hosts: vpx1
+# For Citrix ADC shell support
+    connection: citrix.adc.ssh_citrix_adc
+    gather_facts: False
+    collections:
+      - citrix.adc
+
+#  Create your own pwd_var/{{ runas_admin }}.yml  ( Demo uses pwd_var/joe.yml)
+#
+# Add the following entries to this file
+#  azure_admin_username: myadmin
+#  azure_admin_password: ThinkofaReallyGoodPassword!
+
+#  nitro_user: "{{ azure_admin_username }}"
+#  nitro_pass: "{{ azure_admin_password}}"
+#
+  # ansible_user: "{{ azure_admin_username }}"
+  # ansible_ssh_pass: "{{ azure_admin_password}}"
+
+# Encrypt this file by running
+#
+#   ansible-vault encrypt pwd_var/{{ choosen name }}.yml
+#     For example: ansible-vault encrypt pwd_var/joe.yml
+# Input a password that you will now use to encrypt/decrypt the file
+#
+# When running the playbook, add the following
+#
+#   ansible-playbook configure_adc_web_servers.yml --extra-vars="runas_admin={{ choosen name }}" --ask-vault-pass
+#     For Example: ansible-playbook configure_adc_web_servers.yml --extra-vars="runas_admin=joe" --ask-vault-pass
+
+#  The nsip variable need to be defined.  This
+#
+#  nsip: 1.2.3.4
+    vars_files:
+      - "pwd_vars/{{ runas_admin }}.yml"
+
+    vars:
+      nsip: 20.98.124.11
+      nsip_private_ip: 10.0.1.4
+
+# For Citrix ADC shell support
+      ansible_python_interpreter: /var/python/bin/python
+
+# https://docs.citrix.com/en-us/citrix-adc/citrix-adc-secure-deployment/secure-deployment-guide.html
+
+    tasks:
+      - name: Run nscli command
+        shell: "nscli -s -U :{{ nitro_user }}:{{ nitro_pass }} {{ item }}"
+        with_items:
+          - "disable ns mode MBF"
+          - "disable ns feature CH"
+          - "set ns ip {{ nsip_private_ip }} -restrictAccess enabled"
+          - "set ns ip {{ nsip_private_ip }} -gui SECUREONLY"
+          - "set ssl parameter -denySSLReneg NONSECURE"
+          - "create ssl dhparam dh.key 2048 -gen 2"
+        no_log: True
